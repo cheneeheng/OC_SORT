@@ -64,7 +64,7 @@ class KalmanBoxTracker(object):
     """
     count = 0
 
-    def __init__(self, bbox, delta_t=3, orig=False):
+    def __init__(self, bbox, delta_t=3, orig=False, det_id=-1):
         """
         Initialises a tracker using initial bounding box.
 
@@ -117,11 +117,14 @@ class KalmanBoxTracker(object):
         self.velocity = None
         self.delta_t = delta_t
 
-    def update(self, bbox):
+        self.det_id = det_id
+
+    def update(self, bbox, det_id):
         """
         Updates the state vector with observed bbox.
         """
         if bbox is not None:
+            self.det_id = det_id
             if self.last_observation.sum() >= 0:  # no previous observation
                 previous_box = None
                 for i in range(self.delta_t):
@@ -158,11 +161,11 @@ class KalmanBoxTracker(object):
         Advances the state vector and returns the predicted bounding box
         estimate.
         """
-        if((self.kf.x[6]+self.kf.x[2]) <= 0):
+        if ((self.kf.x[6]+self.kf.x[2]) <= 0):
             self.kf.x[6] *= 0.0
         self.kf.predict()
         self.age += 1
-        if(self.time_since_update > 0):
+        if (self.time_since_update > 0):
             self.hit_streak = 0
         self.time_since_update += 1
         self.history.append(convert_x_to_bbox(self.kf.x))
@@ -218,11 +221,13 @@ class OCSort(object):
         class _track:
             tlbr = None
             track_id = None
+            det_id = None
         output = []
         for track in self.trackers:
             t = _track()
             t.tlbr = convert_x_to_bbox(track.kf.x)[0]
             t.track_id = track.id
+            t.det_id = track.det_id
             output.append(t)
         return output
 
@@ -310,7 +315,7 @@ class OCSort(object):
         )
         # ALGO 1 - 18-29
         for m in matched:
-            self.trackers[m[1]].update(dets[m[0], :])
+            self.trackers[m[1]].update(dets[m[0], :], m[0])
 
         """
         Second round of associaton by OCR
@@ -335,7 +340,8 @@ class OCSort(object):
                     if iou_left[m[0], m[1]] < self.iou_threshold:
                         continue
                     # ALGO 1 - 18-29
-                    self.trackers[trk_ind].update(dets_second[det_ind, :])
+                    self.trackers[trk_ind].update(dets_second[det_ind, :],
+                                                  det_ind)
                     to_remove_trk_indices.append(trk_ind)
                 unmatched_trks = np.setdiff1d(unmatched_trks,
                                               np.array(to_remove_trk_indices))
@@ -362,7 +368,7 @@ class OCSort(object):
                     if iou_left[m[0], m[1]] < self.iou_threshold:
                         continue
                     # ALGO 1 - 18-29
-                    self.trackers[trk_ind].update(dets[det_ind, :])
+                    self.trackers[trk_ind].update(dets[det_ind, :], det_ind)
                     to_remove_det_indices.append(det_ind)
                     to_remove_trk_indices.append(trk_ind)
                 unmatched_dets = np.setdiff1d(unmatched_dets,
@@ -372,12 +378,12 @@ class OCSort(object):
 
         for m in unmatched_trks:
             # ALGO 1 - 18-29
-            self.trackers[m].update(None)
+            self.trackers[m].update(None, None)
 
         # ALGO 1 - 30-35
         # create and initialise new trackers for unmatched detections
         for i in unmatched_dets:
-            trk = KalmanBoxTracker(dets[i, :], delta_t=self.delta_t)
+            trk = KalmanBoxTracker(dets[i, :], delta_t=self.delta_t, det_id=i)
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):
@@ -397,10 +403,10 @@ class OCSort(object):
                 ret.append(np.concatenate((d, [trk.id+1])).reshape(1, -1))
             i -= 1
             # remove dead tracklet
-            if(trk.time_since_update > self.max_age):
+            if (trk.time_since_update > self.max_age):
                 self.trackers.pop(i)
 
-        if(len(ret) > 0):
+        if (len(ret) > 0):
             return np.concatenate(ret)
 
         return np.empty((0, 5))
@@ -533,6 +539,6 @@ class OCSort(object):
             if (trk.time_since_update > self.max_age):
                 self.trackers.pop(i)
 
-        if(len(ret) > 0):
+        if (len(ret) > 0):
             return np.concatenate(ret)
         return np.empty((0, 7))
